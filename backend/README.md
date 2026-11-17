@@ -12,6 +12,7 @@ Python 3.12 · FastAPI · SQLAlchemy 2 + Alembic (PostgreSQL) · Redis · OpenID
 | 1 | Foundation: config, errors, app database, sign-in (OIDC + PKCE), sessions, CSRF, audit log | **Done** |
 | 2 | Data sources: admin wizard endpoints, Azure Key Vault, read-only connection test, schema discovery, catalog | **Done** (PostgreSQL + MySQL) |
 | 3 | Asking: streaming pipeline, query validation, masking, Azure OpenAI (LangChain), caches, conversations, export | **Done** |
+| + | MCP server: AI assistants (Claude, Copilot, Cursor) ask questions through CodeLens | **Done** |
 | 4 | MongoDB, Redis, Snowflake (cost confirmation), SQL Server, Oracle | Next |
 | 5 | Admin users/roles, access requests, cache page, usage metrics, audit log & export | |
 | 6 | Rate limits everywhere, security test suite, Docker image, Azure deployment notes | |
@@ -209,6 +210,62 @@ question, refusal, cancellation and export is audited, including the SQL that ra
   `CODELENS_AZURE_OPENAI_ENDPOINT` / `_DEPLOYMENT`. Disable public network access on the resource and reach it
   through a private endpoint. Ask legal about Microsoft's abuse-monitoring retention (see the main README).
 
+## MCP server (AI assistants)
+
+AI assistants that speak the [Model Context Protocol](https://modelcontextprotocol.io) — Claude, VS Code
+Copilot, Cursor and others — can ask CodeLens questions for a person at **`/api/mcp`** (Streamable HTTP;
+stateless, JSON responses, so any server behind a load balancer can answer). Code: `app/mcp_server.py`.
+
+| Tool | What it does |
+|---|---|
+| `list_data_sources` | The sources this person may use, with example questions |
+| `describe_data_source` | Tables, columns (hidden ones marked) and glossary of one source |
+| `ask_question` | Plain-English question → summary, result rows, and the SQL if the role may see it |
+| `answer_clarification` | Continue a question CodeLens asked to clarify, with the chosen option |
+| `confirm_query` | Run a slow query after the person agreed |
+
+**The assistant never touches a database.** Every call runs the same pipeline as the web app: the person's
+roles decide which sources they see, every query passes `sql_guard`, hidden columns stay null, the question
+rate limit is shared with the web app, and every answer is audited with "via MCP". All tools are read-only
+(`readOnlyHint`). At most `CODELENS_MCP_MAX_ROWS` rows go back to the assistant; the answer includes a link to
+see the rest in CodeLens, and the conversation shows up in the person's CodeLens history.
+
+**Off by default** (`CODELENS_MCP_ENABLED`): answers go to whichever AI model the employee's assistant uses,
+not only the company's Azure OpenAI. Turn it on once the company has approved the assistants, and list their
+app ids in `CODELENS_MCP_ALLOWED_CLIENT_IDS` so tokens issued to any other app are refused.
+
+**Sign-in.** CodeLens is an OAuth 2.1 resource server. An assistant that gets `401` reads
+`/.well-known/oauth-protected-resource/api/mcp`, signs the person in at the company identity provider
+(Authorization Code + PKCE), and sends the access token as `Authorization: Bearer …`. A token is accepted only
+if the company provider signed it, it hasn't expired, its `aud` is the MCP endpoint (`CODELENS_MCP_AUDIENCE`
+to override; this stops tokens for other apps — including the web sign-in — being replayed), it is an access
+token (not an ID or refresh token), and, if configured, it was issued to an approved app. Roles come from the
+token's groups exactly as at web sign-in, so moving someone out of a group takes effect on their next call.
+Google sign-in doesn't apply here (Google access tokens can't be checked offline); Google-only users use the
+web app. Requests must name CodeLens's own host (DNS-rebinding protection).
+
+**Identity provider setup** (production, Entra ID): register an app for the assistants (public client,
+PKCE, redirect URIs of the approved assistants), expose an API whose Application ID URI is the MCP URL (or set
+`CODELENS_MCP_AUDIENCE` to it), include the groups claim in access tokens, and put its client id in
+`CODELENS_MCP_ALLOWED_CLIENT_IDS`. Route `/.well-known/oauth-protected-resource/*` to the backend as well as
+`/api/*`. The dev Keycloak realm has this set up as the `codelens-mcp` client (audience mapper + groups); if
+your Keycloak was started before it was added, re-import with `docker compose up -d --force-recreate keycloak`
+(this resets the dev Keycloak to the realm file).
+
+### Connecting an assistant locally
+
+With `CODELENS_DEV_AUTO_LOGIN=true` (development only) assistants connect without signing in, as Local
+Developer. Turn MCP on with `CODELENS_MCP_ENABLED=true`, then:
+
+- **Claude Code:** `claude mcp add --transport http codelens http://localhost:5173/api/mcp`
+- **VS Code (Copilot agent mode):** `.vscode/mcp.json` →
+  `{"servers": {"codelens": {"type": "http", "url": "http://localhost:5173/api/mcp"}}}`
+- **MCP Inspector** (try the tools by hand): `npx @modelcontextprotocol/inspector`, transport
+  "Streamable HTTP", URL `http://localhost:5173/api/mcp`
+
+Claude Desktop and claude.ai custom connectors reach servers from the internet, so they need CodeLens deployed
+on a public `https://` address (not `localhost`).
+
 ## Audit log
 
 `audit_events` is append-only: PostgreSQL triggers reject `UPDATE`, `DELETE` and `TRUNCATE`, and each row
@@ -239,6 +296,7 @@ app/
   db.py, models.py, audit.py
   auth/           oidc.py (the OIDC client), sessions.py (Redis), deps.py (guards), roles.py, return_to.py
   api/            auth.py, me.py, sources.py, admin_sources.py, admin_roles.py, queries.py, conversations.py
+  mcp_server.py   MCP server for AI assistants: token checks, tools (reuses api/ and pipeline/)
   pipeline/       engine.py (the question flow), sql_guard.py (query checks), results.py (tables, charts, CSV)
   llm/            base.py, standin.py, azure.py (LangChain + Azure OpenAI), cache.py (LangChain Redis cache)
   sources/        fields.py (allowed settings per type), service.py, connectors/ (postgres, mysql)

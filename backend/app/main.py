@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 
 import httpx
 from fastapi import FastAPI
 from redis.asyncio import Redis
+from starlette.routing import Route
 
 from app.api import admin_roles, admin_sources, auth, conversations, me, queries, sources
 from app.audit import AuditLog
@@ -19,6 +20,7 @@ from app.config import Settings, get_settings
 from app.db import make_engine, make_sessionmaker
 from app.errors import install_error_handlers
 from app.llm import make_provider
+from app.mcp_server import build_mcp_server, mcp_http_app
 from app.middleware import BodySizeLimitMiddleware, SecurityHeadersMiddleware, StripQueryStringFilter
 from app.pipeline.engine import QueryEngine
 from app.secrets.store import make_secret_store
@@ -34,6 +36,7 @@ def create_app(
     settings = settings or get_settings()
     settings.check_production_safety()
     logging.getLogger("uvicorn.access").addFilter(StripQueryStringFilter())
+    mcp_server = None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -87,7 +90,10 @@ def create_app(
             audit=app.state.audit,
         )
         try:
-            yield
+            async with AsyncExitStack() as stack:
+                if mcp_server is not None:
+                    await stack.enter_async_context(mcp_server.session_manager.run())
+                yield
         finally:
             await app.state.provider.close()
             await app.state.secrets.close()
@@ -120,4 +126,11 @@ def create_app(
     app.include_router(admin_roles.router)
     app.include_router(queries.router)
     app.include_router(conversations.router)
+
+    if settings.mcp_enabled:
+        # AI assistants (Claude, Copilot, ...) ask questions here; see app/mcp_server.py.
+        mcp_server = build_mcp_server(app, settings)
+        mcp_asgi = mcp_http_app(mcp_server, settings)
+        app.router.routes.append(Route("/api/mcp", endpoint=mcp_asgi))
+        app.router.routes.append(Route("/.well-known/oauth-protected-resource{rest:path}", endpoint=mcp_asgi))
     return app

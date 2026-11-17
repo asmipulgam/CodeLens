@@ -40,6 +40,11 @@ export default defineConfig(({ mode, command }) => {
               target: env.VITE_API_PROXY_TARGET || 'http://localhost:8000',
               changeOrigin: false,
             },
+            // MCP sign-in discovery for AI assistants (the MCP endpoint itself is /api/mcp).
+            '/.well-known/oauth-protected-resource': {
+              target: env.VITE_API_PROXY_TARGET || 'http://localhost:8000',
+              changeOrigin: false,
+            },
           },
     },
     build: {

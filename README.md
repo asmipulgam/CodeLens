@@ -11,7 +11,7 @@ sample data (no real databases, nothing sent anywhere). Pick a demo role on the 
 | Part | Status |
 |---|---|
 | [`frontend/`](frontend/) | Built: React + TypeScript app with a mock backend. See [frontend/README.md](frontend/README.md). |
-| [`backend/`](backend/) | Phases 1–3 of 6 done: sign-in, permissions, audit log; data sources (PostgreSQL, MySQL); asking questions with checked, read-only SQL, caching and history. See [backend/README.md](backend/README.md). |
+| [`backend/`](backend/) | Phases 1–3 of 6 done: sign-in, permissions, audit log; data sources (PostgreSQL, MySQL); asking questions with checked, read-only SQL, caching and history; an **MCP server** so AI assistants (Claude, Copilot, Cursor) can ask questions with the same permissions. See [backend/README.md](backend/README.md). |
 
 ## Decisions
 

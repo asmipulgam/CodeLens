@@ -164,7 +164,7 @@ async def login(
 # ── GET /api/auth/callback ───────────────────────────────────────────────────
 
 
-async def _upsert_user(db: AsyncSession, identity: Identity) -> User:
+async def upsert_user(db: AsyncSession, identity: Identity) -> User:
     user = await db.scalar(
         select(User).where(User.issuer == identity.issuer, User.subject == identity.subject)
     )
@@ -223,7 +223,7 @@ async def callback(
         log.warning("Sign-in failed: %s", exc)
         return _to_login(settings, "sign_in_failed")
 
-    user = await _upsert_user(db, identity)
+    user = await upsert_user(db, identity)
     if client.provider_id == "google":
         # Only allow-listed Google accounts, with exactly the roles listed for them. Never admin.
         role_ids = set(settings.google_users.get(identity.email.strip().lower(), [])) - {"admin"}

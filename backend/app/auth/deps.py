@@ -71,11 +71,8 @@ def check_same_origin(request: Request, settings: Settings) -> None:
 DEV_PROVIDER = "dev"
 
 
-async def _dev_auto_login(
-    request: Request, response: Response, db: AsyncSession, settings: Settings
-) -> tuple[str, SessionData]:
-    """Development only: sign the visitor in as a local developer, without any sign-in page."""
-    from app.audit import AuditLog, AuditRecord
+async def ensure_dev_user(db: AsyncSession, settings: Settings) -> User:
+    """Development only: the local developer account that auto sign-in (web and MCP) acts as."""
     from app.auth.roles import sync_group_roles
 
     user = await db.scalar(
@@ -96,7 +93,16 @@ async def _dev_auto_login(
         await db.flush()
     await sync_group_roles(db, user, set(settings.dev_auto_login_roles))
     await db.commit()
+    return user
 
+
+async def _dev_auto_login(
+    request: Request, response: Response, db: AsyncSession, settings: Settings
+) -> tuple[str, SessionData]:
+    """Development only: sign the visitor in as a local developer, without any sign-in page."""
+    from app.audit import AuditLog, AuditRecord
+
+    user = await ensure_dev_user(db, settings)
     session_id, session = await store_of(request).create(user.id, time.time(), "", DEV_PROVIDER)
     response.set_cookie(
         settings.session_cookie_name,

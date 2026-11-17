@@ -39,10 +39,15 @@ async def list_sources(principal: CurrentPrincipal, db: Db) -> list[dict[str, An
 
 @router.get("/{source_id}/catalog")
 async def catalog(source_id: str, principal: CurrentPrincipal, db: Db) -> dict[str, Any]:
+    return await catalog_for(db, source_id, principal.allowed_source_ids)
+
+
+async def catalog_for(db: AsyncSession, source_id: str, allowed: set[str] | frozenset[str]) -> dict[str, Any]:
+    """The tables and columns a person may ask about. Shared by the web API and the MCP server."""
     source = await db.get(Source, source_id)
     if source is None or not source.enabled:
         raise not_found("Data source not found.")
-    if source.id not in principal.allowed_source_ids:
+    if source.id not in allowed:
         raise forbidden("You don't have access to this data source.")
     names = [entity["name"] for entity in source.exposed]
     return {

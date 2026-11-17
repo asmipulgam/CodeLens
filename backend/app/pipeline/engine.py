@@ -69,6 +69,7 @@ class Asker:
     role_ids: tuple[str, ...]
     permissions: Permissions
     allowed_source_ids: frozenset[str]
+    channel: str = "web"  # "web" or "mcp" (an AI assistant); recorded in the audit log
 
     @property
     def actor(self) -> Actor:
@@ -119,11 +120,17 @@ class QueryEngine:
     # ── public ──
 
     async def stream(self, asker: Asker, query_id: str, mode: str) -> AsyncIterator[str]:
-        """mode: ask | clarify | confirm | refresh"""
+        """mode: ask | clarify | confirm | refresh. Server-Sent Events for the browser."""
+        async for event in self.events(asker, query_id, mode):
+            yield sse(event)
+
+    async def events(self, asker: Asker, query_id: str, mode: str) -> AsyncIterator[dict[str, Any]]:
+        """The same run as plain events (progress, then one result / clarification / confirmation / error).
+        Events carry what the asker may see: `generatedQueries` is already removed when they may not."""
         run = _Run(self, asker, query_id, mode)
         try:
             async for event in run.events():
-                yield sse(event)
+                yield event
         finally:
             await run.finish()
 
@@ -591,7 +598,10 @@ class _Run:
                 rows_returned=rows,
                 cached=cached,
                 duration_ms=int((time.perf_counter() - self.started) * 1000),
-                details=details,
+                details="; ".join(
+                    part for part in ("via MCP" if self.asker.channel == "mcp" else None, details) if part
+                )
+                or None,
             ),
         )
 

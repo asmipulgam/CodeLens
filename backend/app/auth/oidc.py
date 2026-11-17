@@ -11,7 +11,7 @@ import hashlib
 import hmac
 import secrets
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 from urllib.parse import urlencode
 
@@ -154,22 +154,7 @@ class OidcClient:
 
         if self.require_verified_email and claims.get("email_verified") is not True:
             raise OidcError("The provider has not verified this account's email address")
-        email = claims.get("email") or claims.get("preferred_username") or claims.get("upn") or ""
-        name = claims.get("name") or " ".join(
-            part for part in (claims.get("given_name"), claims.get("family_name")) if part
-        )
-        groups = claims.get(self.groups_claim) or []
-        if isinstance(groups, str):
-            groups = [groups]
-        return Identity(
-            issuer=self.issuer,
-            subject=str(claims["sub"]),
-            email=str(email),
-            name=str(name or email or "Unknown user"),
-            groups=[str(group) for group in groups if isinstance(group, str | int)],
-            auth_time=auth_time,
-            id_token=id_token,
-        )
+        return replace(self.identity_from_claims(claims), auth_time=auth_time, id_token=id_token)
 
     async def _validate_id_token(self, id_token: str, nonce: str) -> dict[str, Any]:
         try:
@@ -199,6 +184,55 @@ class OidcClient:
         if not hmac.compare_digest(str(claims.get("nonce", "")), nonce):
             raise OidcError("ID token nonce mismatch")
         return claims
+
+    async def validate_access_token(self, token: str, audience: str) -> dict[str, Any]:
+        """Check an OAuth access token (a JWT) that this provider issued for `audience`.
+
+        Used by the MCP endpoint, where AI assistants send `Authorization: Bearer <token>`. The audience
+        check is what stops a token issued for any other app (including our own web sign-in, whose
+        tokens are for the client id) from being replayed here.
+        """
+        try:
+            try:
+                decoded = jwt.decode(token, await self._keyset(), algorithms=ALLOWED_ALGORITHMS)
+            except JoseError:
+                decoded = jwt.decode(token, await self._keyset(force=True), algorithms=ALLOWED_ALGORITHMS)
+            jwt.JWTClaimsRegistry(
+                leeway=CLOCK_LEEWAY_SECONDS,
+                iss={"essential": True, "value": self.issuer},
+                sub={"essential": True},
+                exp={"essential": True},
+            ).validate(decoded.claims)
+        except (JoseError, ValueError) as exc:
+            raise OidcError(f"Access token rejected: {exc.__class__.__name__}") from exc
+
+        claims = decoded.claims
+        audiences = claims.get("aud")
+        if audience not in (audiences if isinstance(audiences, list) else [audiences]):
+            raise OidcError("Access token was not issued for CodeLens")
+        # Keycloak labels its tokens; refuse ID and refresh tokens even if they somehow carry our audience.
+        kind = str(claims.get("typ", "Bearer")).lower()
+        if kind not in ("bearer", "at+jwt"):
+            raise OidcError("Not an access token")
+        return claims
+
+    def identity_from_claims(self, claims: dict[str, Any]) -> Identity:
+        email = claims.get("email") or claims.get("preferred_username") or claims.get("upn") or ""
+        name = claims.get("name") or " ".join(
+            part for part in (claims.get("given_name"), claims.get("family_name")) if part
+        )
+        groups = claims.get(self.groups_claim) or []
+        if isinstance(groups, str):
+            groups = [groups]
+        return Identity(
+            issuer=self.issuer,
+            subject=str(claims["sub"]),
+            email=str(email),
+            name=str(name or email or "Unknown user"),
+            groups=[str(group) for group in groups if isinstance(group, str | int)],
+            auth_time=float(claims.get("auth_time") or claims.get("iat") or time.time()),
+            id_token="",
+        )
 
     async def end_session_url(self, *, id_token_hint: str, post_logout_redirect_uri: str) -> str | None:
         try:

@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit import AuditLog, AuditRecord
 from app.auth.deps import CurrentPrincipal, Principal, require_permission, store_of
+from app.auth.sessions import SessionStore
 from app.db import get_db
 from app.errors import ApiError, not_found, rate_limited
 from app.models import Conversation, Feedback, Message, QueryRecord, utcnow
@@ -23,6 +24,7 @@ from app.pipeline.engine import Asker, QueryEngine
 router = APIRouter(prefix="/api", tags=["questions"])
 Db = Annotated[AsyncSession, Depends(get_db)]
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+MAX_QUESTION_LENGTH = 2000
 
 
 class Strict(BaseModel):
@@ -85,31 +87,40 @@ def _stream(request: Request, principal: Principal, query_id: str, mode: str) ->
     )
 
 
-async def _check_rate(request: Request, principal: Principal) -> None:
-    limit = request.app.state.settings.questions_per_minute
-    if await store_of(request).hit_rate_limit(f"ask:{principal.user.id}", limit):
+# ── shared by the web API and the MCP server, so both follow exactly the same rules ──
+
+
+async def check_question_rate(store: SessionStore, limit: int, user_id: str) -> None:
+    if await store.hit_rate_limit(f"ask:{user_id}", limit):
         raise rate_limited()
 
 
-async def _own_query(db: AsyncSession, query_id: str, principal: Principal) -> QueryRecord:
+async def own_query(db: AsyncSession, query_id: str, user_id: str) -> QueryRecord:
     record = await db.get(QueryRecord, query_id)
-    if record is None or record.user_id != principal.user.id:
+    if record is None or record.user_id != user_id:
         raise not_found("Question not found.")
     return record
 
 
-@router.post("/queries")
-async def ask(body: AskIn, principal: CurrentPrincipal, db: Db, request: Request) -> StreamingResponse:
-    await _check_rate(request, principal)
-    question = _CONTROL.sub("", body.question)
-    conversation = await db.get(Conversation, body.conversationId) if body.conversationId else None
-    if body.conversationId and (conversation is None or conversation.owner_id != principal.user.id):
+async def start_question(
+    db: AsyncSession,
+    user_id: str,
+    question_text: str,
+    source_ids: list[str],
+    conversation_id: str | None,
+) -> QueryRecord:
+    """Record a new question (and its conversation) so the engine can answer it."""
+    question = _CONTROL.sub("", question_text).strip()
+    if not question or len(question) > MAX_QUESTION_LENGTH:
+        raise ApiError(400, "invalid", f"Ask a question of 1 to {MAX_QUESTION_LENGTH} characters.")
+    conversation = await db.get(Conversation, conversation_id) if conversation_id else None
+    if conversation_id and (conversation is None or conversation.owner_id != user_id):
         raise not_found("Conversation not found.")
     now = utcnow()
     if conversation is None:
         conversation = Conversation(
             id=new_id("c"),
-            owner_id=principal.user.id,
+            owner_id=user_id,
             title=question[:80],
             pinned=False,
             created_at=now,
@@ -135,11 +146,11 @@ async def ask(body: AskIn, principal: CurrentPrincipal, db: Db, request: Request
     )
     record = QueryRecord(
         id=new_id("q"),
-        user_id=principal.user.id,
+        user_id=user_id,
         conversation_id=conversation.id,
         assistant_message_id=assistant_id,
         question=question,
-        requested_source_ids=list(body.sourceIds),
+        requested_source_ids=list(source_ids),
     )
     db.add(
         Message(
@@ -159,15 +170,11 @@ async def ask(body: AskIn, principal: CurrentPrincipal, db: Db, request: Request
     )
     db.add(record)
     await db.commit()
-    return _stream(request, principal, record.id, "ask")
+    return record
 
 
-@router.post("/queries/{query_id}/clarify")
-async def clarify(
-    query_id: str, body: ClarifyIn, principal: CurrentPrincipal, db: Db, request: Request
-) -> StreamingResponse:
-    record = await _own_query(db, query_id, principal)
-    option = next((o for o in record.clarification_options if o.get("id") == body.optionId), None)
+async def start_clarify(db: AsyncSession, record: QueryRecord, option_id: str) -> None:
+    option = next((o for o in record.clarification_options if o.get("id") == option_id), None)
     if option is None or record.status != "needs_clarification":
         raise ApiError(400, "invalid", "That option isn't available for this question.")
     record.clarification_choice = option["id"]
@@ -177,6 +184,40 @@ async def clarify(
         payload = {k: v for k, v in message.payload.items() if k != "clarification"}
         message.payload = {**payload, "status": "running", "clarificationAnswer": option.get("label", "")}
     await db.commit()
+
+
+async def start_confirm(db: AsyncSession, record: QueryRecord) -> None:
+    if record.status != "needs_confirmation" or not record.pending_plan:
+        raise ApiError(400, "invalid", "This question isn't waiting for confirmation.")
+    record.status = "running"
+    await db.commit()
+
+
+# ── web endpoints ──
+
+
+async def _check_rate(request: Request, principal: Principal) -> None:
+    limit = request.app.state.settings.questions_per_minute
+    await check_question_rate(store_of(request), limit, principal.user.id)
+
+
+async def _own_query(db: AsyncSession, query_id: str, principal: Principal) -> QueryRecord:
+    return await own_query(db, query_id, principal.user.id)
+
+
+@router.post("/queries")
+async def ask(body: AskIn, principal: CurrentPrincipal, db: Db, request: Request) -> StreamingResponse:
+    await _check_rate(request, principal)
+    record = await start_question(db, principal.user.id, body.question, body.sourceIds, body.conversationId)
+    return _stream(request, principal, record.id, "ask")
+
+
+@router.post("/queries/{query_id}/clarify")
+async def clarify(
+    query_id: str, body: ClarifyIn, principal: CurrentPrincipal, db: Db, request: Request
+) -> StreamingResponse:
+    record = await _own_query(db, query_id, principal)
+    await start_clarify(db, record, body.optionId)
     return _stream(request, principal, record.id, "clarify")
 
 
@@ -185,10 +226,7 @@ async def confirm(
     query_id: str, principal: CurrentPrincipal, db: Db, request: Request, body: EmptyIn | None = None
 ) -> StreamingResponse:
     record = await _own_query(db, query_id, principal)
-    if record.status != "needs_confirmation" or not record.pending_plan:
-        raise ApiError(400, "invalid", "This question isn't waiting for confirmation.")
-    record.status = "running"
-    await db.commit()
+    await start_confirm(db, record)
     return _stream(request, principal, record.id, "confirm")
 
 

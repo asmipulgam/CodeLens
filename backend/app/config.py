@@ -68,6 +68,18 @@ class Settings(BaseSettings):
     confirm_rows_threshold: int = 5_000_000
     questions_per_minute: int = 20
 
+    # ── MCP server (AI assistants such as Claude or Copilot asking questions through CodeLens) ──
+    # Off by default: answers go to whichever AI model the employee's assistant uses, so only turn it on
+    # once the company has approved those assistants.
+    mcp_enabled: bool = False
+    # The `aud` an access token must carry to be accepted. Empty = the MCP endpoint URL (RFC 8707).
+    mcp_audience: str = ""
+    # If set, only tokens issued to these OAuth client ids (the `azp` claim) are accepted: the approved
+    # assistant apps registered at the identity provider.
+    mcp_allowed_client_ids: list[str] = Field(default_factory=list)
+    # At most this many result rows go back to the assistant (the rest stay in CodeLens).
+    mcp_max_rows: int = Field(default=100, ge=1, le=1000)
+
     # ── Development only: skip sign-in ──
     # Every visitor is signed in automatically as a local developer with these roles. The app refuses to
     # start in production with this on. Turn it off to get the sign-in page back.
@@ -138,6 +150,14 @@ class Settings(BaseSettings):
     @property
     def redirect_uri(self) -> str:
         return f"{self.public_url}/api/auth/callback"
+
+    @property
+    def mcp_url(self) -> str:
+        return f"{self.public_url}/api/mcp"
+
+    @property
+    def mcp_token_audience(self) -> str:
+        return self.mcp_audience or self.mcp_url
 
     def check_production_safety(self) -> None:
         """Refuse to start in production with settings that are only acceptable on a laptop."""

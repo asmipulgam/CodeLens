@@ -3,6 +3,7 @@ that signs real tokens — so signature, nonce, audience and PKCE checks all run
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -207,12 +208,27 @@ async def app(settings: Settings, idp: FakeIdP, google: FakeIdP) -> AsyncIterato
 
     http = httpx.AsyncClient(transport=httpx.MockTransport(route))
     application = create_app(settings, redis=FakeAsyncRedis(), http=http)
-    async with application.router.lifespan_context(application):
-        # SQLite allows one writer at a time, so the encrypted local store (its own transaction) would
-        # deadlock with the request's transaction here; it is tested on its own in test_secrets.py.
-        application.state.secrets = MemorySecretStore()
-        application.state.engine.secrets = application.state.secrets
-        yield application
+
+    # Run startup and shutdown in one task, as uvicorn does (the MCP session manager's task group requires
+    # it; pytest-asyncio would otherwise run fixture setup and teardown in different tasks).
+    started, stop = asyncio.Event(), asyncio.Event()
+
+    async def lifespan() -> None:
+        async with application.router.lifespan_context(application):
+            started.set()
+            await stop.wait()
+
+    task = asyncio.create_task(lifespan())
+    await asyncio.wait([task, asyncio.create_task(started.wait())], return_when=asyncio.FIRST_COMPLETED)
+    if task.done():
+        task.result()  # startup failed: raise its error
+    # SQLite allows one writer at a time, so the encrypted local store (its own transaction) would
+    # deadlock with the request's transaction here; it is tested on its own in test_secrets.py.
+    application.state.secrets = MemorySecretStore()
+    application.state.engine.secrets = application.state.secrets
+    yield application
+    stop.set()
+    await task
     await http.aclose()
 
 
