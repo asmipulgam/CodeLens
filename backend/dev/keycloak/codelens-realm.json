@@ -1,0 +1,159 @@
+{
+  "realm": "codelens",
+  "enabled": true,
+  "displayName": "CodeLens (local development)",
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "bruteForceProtected": true,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "accessTokenLifespan": 300,
+  "groups": [
+    {
+      "name": "codelens-business"
+    },
+    {
+      "name": "codelens-analysts"
+    },
+    {
+      "name": "codelens-admins"
+    },
+    {
+      "name": "codelens-auditors"
+    },
+    {
+      "name": "marketing"
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "codelens",
+      "name": "CodeLens",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "dev-only-change-me",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": true,
+      "redirectUris": [
+        "http://localhost:5173/api/auth/callback"
+      ],
+      "webOrigins": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:5173/*"
+      },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "config": {
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "false",
+            "userinfo.token.claim": "true",
+            "claim.name": "groups"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "priya",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Priya",
+      "lastName": "Shah",
+      "email": "priya@example.com",
+      "groups": [
+        "/codelens-business"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "codelens-dev",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "marcus",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Marcus",
+      "lastName": "Lee",
+      "email": "marcus@example.com",
+      "groups": [
+        "/codelens-analysts"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "codelens-dev",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "dana",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Dana",
+      "lastName": "Okafor",
+      "email": "dana@example.com",
+      "groups": [
+        "/codelens-admins"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "codelens-dev",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "sam",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Sam",
+      "lastName": "Rivera",
+      "email": "sam@example.com",
+      "groups": [
+        "/codelens-auditors"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "codelens-dev",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "alex",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Alex",
+      "lastName": "Kim",
+      "email": "alex@example.com",
+      "groups": [
+        "/marketing"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "codelens-dev",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}

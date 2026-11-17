@@ -1,0 +1,91 @@
+# Local development only: the app database, Redis and a Keycloak sign-in server with demo users.
+# Every port is bound to 127.0.0.1 so nothing is reachable from the network.
+# The backend itself runs on your machine (`uv run uvicorn ...`), see README.md.
+
+name: codelens
+
+services:
+  postgres:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_DB: codelens
+      POSTGRES_USER: codelens
+      POSTGRES_PASSWORD: codelens  # development only
+    ports: ["127.0.0.1:5433:5432"]  # 5433 to avoid clashing with other local Postgres servers
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U codelens -d codelens"]
+      interval: 3s
+      retries: 20
+
+  redis:
+    image: redis:8.2.2-alpine
+    # Sessions live here; nothing needs to survive a restart in development.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports: ["127.0.0.1:6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      retries: 20
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4.2
+    command: ["start-dev", "--import-realm", "--http-port=8080"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin  # development only
+      KC_HEALTH_ENABLED: "true"
+    ports: ["127.0.0.1:8080:8080"]
+    volumes: ["./dev/keycloak/codelens-realm.json:/opt/keycloak/data/import/codelens-realm.json:ro"]
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
+      interval: 5s
+      retries: 40
+
+  # ── Sample company databases to connect as data sources (development only) ──
+
+  sample-certs:
+    # Makes a self-signed TLS certificate so the sample Postgres only talks encrypted.
+    image: alpine/openssl:3.5.2
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        [ -f /certs/server.key ] ||
+        (openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj /CN=localhost
+        -keyout /certs/server.key -out /certs/server.crt &&
+        chown 70:70 /certs/server.key /certs/server.crt && chmod 600 /certs/server.key)
+    volumes: [sample-certs:/certs]
+
+  sample-postgres:
+    image: postgres:17.6-alpine
+    depends_on:
+      sample-certs: { condition: service_completed_successfully }
+    command: ["-c", "ssl=on", "-c", "ssl_cert_file=/certs/server.crt", "-c", "ssl_key_file=/certs/server.key"]
+    environment:
+      POSTGRES_DB: company
+      POSTGRES_USER: owner
+      POSTGRES_PASSWORD: owner-dev  # development only
+    ports: ["127.0.0.1:5434:5432"]
+    volumes:
+      - sample-certs:/certs:ro
+      - ./dev/sample-postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U owner -d company"]
+      interval: 3s
+      retries: 20
+
+  sample-mysql:
+    image: mysql:8.4.6
+    environment:
+      MYSQL_ROOT_PASSWORD: root-dev  # development only
+      MYSQL_DATABASE: sales
+    ports: ["127.0.0.1:3307:3306"]
+    volumes: ["./dev/sample-mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro"]
+    healthcheck:
+      test: ["CMD-SHELL", "mysql -h 127.0.0.1 -uroot -proot-dev -e 'SELECT 1 FROM sales.orders LIMIT 1'"]
+      interval: 5s
+      retries: 40
+
+volumes:
+  postgres-data:
+  sample-certs:
