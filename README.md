@@ -5,6 +5,9 @@ company's connected databases (SQL, Snowflake, MongoDB, Redis and more) without 
 engineer. Answers come from safe, read-only queries; repeated questions are served from a
 LangChain-backed cache; and every action is audited.
 
+**[Try the live demo →](https://asmipulgam.github.io/CodeLens/)** It runs entirely in your browser on
+sample data (no real databases, nothing sent anywhere). Pick a demo role on the sign-in screen.
+
 | Part | Status |
 |---|---|
 | [`frontend/`](frontend/) | Built: React + TypeScript app with a mock backend. See [frontend/README.md](frontend/README.md). |

@@ -25,6 +25,8 @@ export default defineConfig(({ mode, command }) => {
   const useMocks = env.VITE_USE_MOCKS === 'true';
 
   return {
+    // GitHub Pages serves the demo from /<repo>/, so the build can be told its base path.
+    base: env.VITE_BASE_PATH || '/',
     plugins: [react(), stripMockWorker(useMocks)],
     resolve: {
       alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },

@@ -4,5 +4,9 @@ import { handlers } from './handlers';
 /** Starts the in-browser mock API. Only imported when VITE_USE_MOCKS=true. */
 export async function startMockBackend() {
   const worker = setupWorker(...handlers);
-  await worker.start({ onUnhandledRequest: 'bypass', quiet: true });
+  await worker.start({
+    onUnhandledRequest: 'bypass',
+    quiet: true,
+    serviceWorker: { url: `${import.meta.env.BASE_URL}mockServiceWorker.js` },
+  });
 }
